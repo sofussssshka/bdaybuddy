@@ -1,8 +1,12 @@
 from telegram import Update, MessageEntity
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, filters, ConversationHandler, MessageHandler, \
     CallbackContext
-
 from src.database import get_connection
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.interval import IntervalTrigger
+from datetime import datetime, timedelta
+import asyncio
+
 
 ASK_BIRTHDAY_NAME: int
 ASK_BIRTHDAY_NAME, ASK_BIRTHDAY_DATE, ASK_DELETE_BIRTHDAY, ASK_EDIT_BIRTHDAY_NAME, ASK_EDIT_BIRTHDAY_DATE,ASK_WISH,ASK_DELETE_WISH = range(7)
@@ -13,6 +17,8 @@ class Commandshendler:
         self.app = app
         self.setup()
         self.wishlist = {}
+        self.scheduler = AsyncIOScheduler()  # Ініціалізація планувальника
+        self.scheduler.start()  # Запуск планувальника
 
     def setup(self):
         self.app.add_handler(CommandHandler("start", self.start))
@@ -57,8 +63,69 @@ class Commandshendler:
             },
             fallbacks=[CommandHandler("cancel", self.cancel)]
         ))
+        self.app.add_handler(ConversationHandler(
+            entry_points=[CommandHandler("delete_wish", self.delete_wish)],
+            states={
+                ASK_DELETE_WISH: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.save_delete_wish)],
+            },
+            fallbacks=[CommandHandler("cancel", self.cancel)]
+        ))
 
+    async def delete_wish(self, update: Update, context: CallbackContext):
+        nickname = f"@{update.effective_user.username}"
+        query = "SELECT id FROM birthdays WHERE nickname = %s"
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(query, (nickname,))
+        result = cursor.fetchone()
 
+        if result is None:
+            await update.message.reply_text(
+                "Ваш день народження не зареєстрований, тому ви не можете переглянути свій вішліст."
+            )
+            cursor.close()
+            conn.close()
+            return ConversationHandler.END
+
+        birthday_id = result[0]
+        wishlist_query = "SELECT item_name FROM wishlists WHERE birthday_id = %s"
+        cursor.execute(wishlist_query, (birthday_id,))
+        results = cursor.fetchall()
+
+        wish_map = {}
+        i = 1
+        if results:
+            wishlist_text = "Ваш вішліст:\n"
+            for item in results:
+                wishlist_text += f"{i}. 🎁 {item[0]}\n"
+                wish_map[i] = item[0]
+                i += 1
+            wishlist_text += "\nВведіть цифру бажання, яке ви хочете видалити."
+        else:
+            wishlist_text = "Ваш вішліст порожній."
+
+        context.user_data['wish_map'] = wish_map
+        await update.message.reply_text(wishlist_text)
+        cursor.close()
+        conn.close()
+        return ASK_DELETE_WISH
+
+    async def save_delete_wish(self, update: Update, context: CallbackContext):
+        wish_map = context.user_data['wish_map']
+        text_choose = update.message.text
+        if text_choose.isdigit() and int(text_choose) in wish_map:
+            text_value = wish_map.get(int(text_choose))
+            delete_query = "DELETE FROM wishlists WHERE item_name = %s"
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(delete_query, (text_value,))
+            conn.commit()
+
+            await update.message.reply_text(f"Побажання '{text_value}' успішно видалене.")
+        else:
+            await update.message.reply_text("Неправильний вибір. Спробуйте ще раз.")
+
+        return ConversationHandler.END
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Привіт, я BDayBuddy!Напишіть /help для списку команд.")
@@ -178,6 +245,28 @@ class Commandshendler:
             await update.message.reply_text("Цей нікнейм не знайдено в списку днів народження.")
             return ConversationHandler.END
 
+        query = "SELECT id FROM birthdays WHERE nickname = %s"
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(query, (nickname_to_delete,))
+        result = cursor.fetchone()
+
+        if result:
+            birthday_id = result[0]
+            delete_wishlist_query = "DELETE FROM wishlists WHERE birthday_id = %s"
+            cursor.execute(delete_wishlist_query, (birthday_id,))
+            conn.commit()
+
+        # Now, delete the birthday entry
+        delete_birthday_query = "DELETE FROM birthdays WHERE nickname = %s"
+        cursor.execute(delete_birthday_query, (nickname_to_delete,))
+        conn.commit()
+
+        await update.message.reply_text(f"День народження для {nickname_to_delete} успішно видалено!")
+        cursor.close()
+        conn.close()
+        return ConversationHandler.END
+
 
         query = "DELETE FROM birthdays WHERE nickname = %s"
         conn = get_connection()
@@ -281,8 +370,6 @@ class Commandshendler:
 
     async def my_wishlist(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         nickname = f"@{update.effective_user.username}"
-
-
         query = "SELECT id FROM birthdays WHERE nickname = %s"
         conn = get_connection()
         cursor = conn.cursor()
@@ -349,14 +436,31 @@ class Commandshendler:
         return ConversationHandler.END
 
 
+    def schedule_birthday_reminders(self):
+        query = "SELECT nickname, birthday FROM birthdays"
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(query)
+        results = cursor.fetchall()
 
-    async def delete_wish(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await update.message.reply_text("Введіть ваше побажання, яке потрібно видалити:")
-        return ASK_DELETE_WISH
+        for nickname, birthday in results:
+            self.scheduler.add_job(self.send_birthday_reminder,
+                                   IntervalTrigger(days=1),  # Запускаємо щодня
+                                   args=[nickname, birthday])
 
-    async def confirm_delete_wish(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        wish = update.message.text
-        user_id = update.effective_user
+        cursor.close()
+        conn.close()
+
+
+    async def send_birthday_reminder(self, nickname: str, birthday: str):
+        today = datetime.today()
+        birthday_date = datetime.strptime(birthday, "%Y-%m-%d")
+
+        if today.date() == birthday_date.date() - timedelta(days=7):
+            await self.send_message(f"Нагадування: через тиждень у {nickname} день народження! Не забудь надіслати гроші!")
+        elif today.date() == birthday_date.date() - timedelta(days=3):
+            await self.send_message(f"Нагадування: через 3 дні у {nickname} день народження! Пам'ятай про подарунок!")
+
 
 
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -366,16 +470,11 @@ class Commandshendler:
 
     async def get_all_nicknames(self):
         query = "SELECT nickname FROM birthdays"
-
         conn = get_connection()
         cursor = conn.cursor()
         cursor.execute(query)
-
         results = cursor.fetchall()
-
         nicknames = [row[0] for row in results]
-
         cursor.close()
         conn.close()
-
         return nicknames
