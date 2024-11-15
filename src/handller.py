@@ -1,12 +1,16 @@
+from flask.sansio import app
 from telegram import Update, MessageEntity
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, filters, ConversationHandler, MessageHandler, \
     CallbackContext
 from src.database import get_connection
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 import asyncio
-
+import schedule
+import time
 
 ASK_BIRTHDAY_NAME: int
 ASK_BIRTHDAY_NAME, ASK_BIRTHDAY_DATE, ASK_DELETE_BIRTHDAY, ASK_EDIT_BIRTHDAY_NAME, ASK_EDIT_BIRTHDAY_DATE,ASK_WISH,ASK_DELETE_WISH = range(7)
@@ -15,10 +19,11 @@ ASK_BIRTHDAY_NAME, ASK_BIRTHDAY_DATE, ASK_DELETE_BIRTHDAY, ASK_EDIT_BIRTHDAY_NAM
 class Commandshendler:
     def __init__(self, app):
         self.app = app
+        self.scheduler = AsyncIOScheduler()  # Initialize Async Scheduler
         self.setup()
         self.wishlist = {}
-        self.scheduler = AsyncIOScheduler()  # Ініціалізація планувальника
-        self.scheduler.start()  # Запуск планувальника
+        self.schedule_daily_birthday_check()
+        self.chat_id = None
 
     def setup(self):
         self.app.add_handler(CommandHandler("start", self.start))
@@ -70,6 +75,72 @@ class Commandshendler:
             },
             fallbacks=[CommandHandler("cancel", self.cancel)]
         ))
+
+    async def capture_chat_id(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Capture and save the chat_id when the bot joins a new group."""
+        chat_id = update.effective_chat.id
+
+        connection = get_connection()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "INSERT IGNORE INTO birthdays (chat_id) VALUES (%s)",  # Ensure no duplicates
+                (chat_id,)
+            )
+        connection.commit()
+        connection.close()
+        print(f"Captured chat_id: {chat_id}")
+
+    async def check_birthdays(self):
+        """Function to check the database for today’s birthdays and send greetings."""
+
+        connection = get_connection()
+        today = datetime.now().strftime('%m-%d')  # Format today's date as month-day
+
+        # Fetch all chat_id values
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT DISTINCT chat_id FROM birthdays")  # Get all unique chat_ids
+            chat_ids = cursor.fetchall()
+
+        if not chat_ids:
+            print("No chat IDs found in the database.")
+            return
+
+        print(f"Chat IDs found: {chat_ids}")  # Log chat_ids
+
+        for chat_id_row in chat_ids:
+            chat_id = chat_id_row[0]
+
+            # Query for today's birthdays in each group
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT nickname FROM birthdays WHERE DATE_FORMAT(birthday, '%m-%d') = %s AND chat_id = %s",
+                    (today, chat_id))
+                birthdays = cursor.fetchall()
+
+            if not birthdays:
+                print(f"No birthdays found today for group with chat_id {chat_id}.")
+                continue
+
+            # Send greetings if there are birthdays today in this group
+            for birthday in birthdays:
+                nickname = birthday[0]
+                message = f"🎉 Happy Birthday, {nickname}! 🎂 Wishing you a fantastic day!"
+                print(f"Sending message to chat_id {chat_id}: {message}")  # Log the message
+                try:
+                    await self.app.bot.send_message(chat_id=chat_id, text=message)
+                    print(f"Message successfully sent to {nickname}")
+                except Exception as e:
+                    print(f"Error sending message: {e}")  # Log any errors if the message isn't sent
+
+        connection.close()
+
+    def schedule_daily_birthday_check(self):
+        """Schedules the birthday check to run daily at a specified time."""
+        self.scheduler.add_job(self.check_birthdays, CronTrigger(hour=16, minute=17))  # Example: 9:00 AM daily
+        self.scheduler.start()
+
+
+
 
     async def delete_wish(self, update: Update, context: CallbackContext):
         nickname = f"@{update.effective_user.username}"
@@ -132,7 +203,7 @@ class Commandshendler:
 
     async def help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
-            "Команди користувача:\n/view_birthdays - Переглянути всі дні народження\n/add_wish - Додати елемент до свого списку бажань\n/view_wishlist - Переглянути чийсь список бажань\n/my_wishlist - Переглянути свій список бажань\n\nКоманди адміністратора:\n/add_birthday - Додати новий день народження\n/edit_birthday - Редагувати існуючий день народження\n/delete_birthday - Видалити день народження")
+            "Команди користувача:\n/view_birthdays - Переглянути всі дні народження\n/add_wish - Додати елемент до свого списку бажань\n/delete_wish - Видалити побажання з свого списку юажань\n/view_wishlist - Переглянути чийсь список бажань\n/my_wishlist - Переглянути свій список бажань\n\nКоманди адміністратора:\n/add_birthday - Додати новий день народження\n/edit_birthday - Редагувати існуючий день народження\n/delete_birthday - Видалити день народження")
 
     async def add_birthday(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
@@ -174,57 +245,49 @@ class Commandshendler:
 
     async def save_birthday(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         birthday = update.message.text
+        chat_id = update.effective_chat.id
         name = context.user_data['name']
         id = context.user_data['user_id']
 
         query = """
-                    INSERT INTO birthdays (nickname, birthday)
-                    VALUES (%s, %s)
+                    INSERT INTO birthdays (nickname, birthday, chat_id)
+                    VALUES (%s, %s ,%s)
                     """
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute(query, (name, birthday))
+        cursor.execute(query, (name, birthday, chat_id))
         conn.commit()
 
         await update.message.reply_text(f"Дату народження для {context.user_data['name']} встановлено!")
         context.user_data.clear()
 
 
-    async def save_birthday(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        birthday = update.message.text
-        name = context.user_data['name']
-        id = context.user_data['user_id']
 
-        query = """
-                    INSERT INTO birthdays (nickname, birthday)
-                    VALUES (%s, %s)
-                    """
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute(query, (name, birthday))
-        conn.commit()
-
-        await update.message.reply_text(f"Дату народження для {context.user_data['name']} встановлено!")
-        context.user_data.clear()
-        return ConversationHandler.END
 
     async def view_birthdays(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = "SELECT nickname, birthday FROM birthdays"
+        """Показує дні народження для поточної групи."""
+        chat_id = update.effective_chat.id  # Отримуємо chat_id групи
+
+        # Запит із фільтрацією за chat_id
+        query = "SELECT nickname, DATE_FORMAT(birthday, '%d-%m-%Y') FROM birthdays WHERE chat_id = %s"
+
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute(query)
+        cursor.execute(query, (chat_id,))  # Передаємо chat_id як параметр запиту
 
         results = cursor.fetchall()
         cursor.close()
         conn.close()
 
         if results:
-            birthdays_text = "Список днів народжень:\n"
+            birthdays_text = "📅 Список днів народжень:\n"
             for nickname, birthday in results:
                 birthdays_text += f"👤 {nickname}: 🎂 {birthday}\n"
         else:
-            birthdays_text = "Список днів народжень порожній."
+            birthdays_text = "📭 У цій групі немає записаних днів народжень."
+
         await update.message.reply_text(birthdays_text)
+
 
     async def delete_birthday(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
@@ -328,78 +391,76 @@ class Commandshendler:
         return ASK_BIRTHDAY_NAME
 
     async def ask_view_wishlist(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        nickname = update.message.text
+        nickname = update.message.text.strip()
 
+        if not nickname.startswith('@'):
+            await update.message.reply_text("Нікнейм має починатися з '@'.")
+            return ConversationHandler.END
 
         nicknames = await self.get_all_nicknames()
         if nickname not in nicknames:
             await update.message.reply_text("Цей нікнейм не знайдено в списку днів народження.")
             return ConversationHandler.END
 
-
         query = "SELECT id FROM birthdays WHERE nickname = %s"
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute(query, (nickname,))
-        result = cursor.fetchone()
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (nickname,))
+            result = cursor.fetchone()
 
-        if result is None:
-            await update.message.reply_text("Не вдалося знайти id для цього нікнейма.")
-            cursor.close()
-            conn.close()
+            if result is None:
+                await update.message.reply_text("Не вдалося знайти id для цього нікнейма.")
+                return ConversationHandler.END
+
+            birthday_id = result[0]
+
+            # Додаємо chat_id в запит для перевірки
+            wishlist_query = "SELECT item_name FROM wishlists WHERE birthday_id = %s AND chat_id = %s"
+            cursor.execute(wishlist_query, (birthday_id, update.effective_chat.id))
+            results = cursor.fetchall()
+
+            if results:
+                wishlist_text = f"Вішліст для {nickname}:\n"
+                for item in results:
+                    wishlist_text += f"🎁 {item[0]}\n"
+            else:
+                wishlist_text = f"Вішліст для {nickname} порожній."
+
+            await update.message.reply_text(wishlist_text)
             return ConversationHandler.END
 
-        birthday_id = result[0]
-
-
-        wishlist_query = "SELECT item_name FROM wishlists WHERE birthday_id = %s"
-        cursor.execute(wishlist_query, (birthday_id,))
-        results = cursor.fetchall()
-
-        if results:
-            wishlist_text = f"Вішліст для {nickname}:\n"
-            for item in results:
-                wishlist_text += f"🎁 {item[0]}\n"
-        else:
-            wishlist_text = f"Вішліст для {nickname} порожній."
-
-        await update.message.reply_text(wishlist_text)
-        cursor.close()
-        conn.close()
-        return ConversationHandler.END
 
     async def my_wishlist(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         nickname = f"@{update.effective_user.username}"
+        chat_id = update.effective_chat.id  # Отримуємо chat_id поточного чату
         query = "SELECT id FROM birthdays WHERE nickname = %s"
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute(query, (nickname,))
-        result = cursor.fetchone()
 
-        if result is None:
-            await update.message.reply_text(
-                "Ваш день народження не зареєстрований, тому ви не можете переглянути свій вішліст.")
-            cursor.close()
-            conn.close()
-            return ConversationHandler.END
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (nickname,))
+            result = cursor.fetchone()
 
-        birthday_id = result[0]
+            if result is None:
+                await update.message.reply_text(
+                    "Ваш день народження не зареєстрований, тому ви не можете переглянути свій вішліст.")
+                return ConversationHandler.END
 
+            birthday_id = result[0]
 
-        wishlist_query = "SELECT item_name FROM wishlists WHERE birthday_id = %s"
-        cursor.execute(wishlist_query, (birthday_id,))
-        results = cursor.fetchall()
+            # Фільтруємо побажання для цього користувача в конкретному чату
+            wishlist_query = "SELECT item_name FROM wishlists WHERE birthday_id = %s AND chat_id = %s"
+            cursor.execute(wishlist_query, (birthday_id, chat_id))
+            results = cursor.fetchall()
 
-        if results:
-            wishlist_text = "Ваш вішліст:\n"
-            for item in results:
-                wishlist_text += f"🎁 {item[0]}\n"
-        else:
-            wishlist_text = "Ваш вішліст порожній."
+            if results:
+                wishlist_text = "Ваш вішліст:\n"
+                for item in results:
+                    wishlist_text += f"🎁 {item[0]}\n"
+            else:
+                wishlist_text = "Ваш вішліст порожній."
 
-        await update.message.reply_text(wishlist_text)
-        cursor.close()
-        conn.close()
+            await update.message.reply_text(wishlist_text)
+
 
     async def add_wish(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Введіть ваше побажання:")
@@ -408,60 +469,29 @@ class Commandshendler:
     async def save_wish(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         wish = update.message.text
         nickname = f"@{update.effective_user.username}"
+        chat_id = update.effective_chat.id  # Get chat_id of the current group
 
         # Перевіряємо, чи існує такий нікнейм в таблиці 'birthdays'
         query = "SELECT id FROM birthdays WHERE nickname = %s"
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute(query, (nickname,))
-        result = cursor.fetchone()
 
-        if result is None:
-            await update.message.reply_text(
-                "Вибачте, але ви не можете додати побажання, оскільки ваш день народження не зареєстрований.")
-            cursor.close()
-            conn.close()
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (nickname,))
+            result = cursor.fetchone()
+
+            if result is None:
+                await update.message.reply_text(
+                    "Вибачте, але ви не можете додати побажання, оскільки ваш день народження не зареєстрований.")
+                return ConversationHandler.END
+
+            birthday_id = result[0]
+
+            insert_query = "INSERT INTO wishlists (birthday_id, item_name, chat_id) VALUES (%s, %s, %s)"
+            cursor.execute(insert_query, (birthday_id, wish, chat_id))
+            conn.commit()
+
+            await update.message.reply_text("Ваше побажання додано до вішлісту!")
             return ConversationHandler.END
-
-        birthday_id = result[0]
-
-
-        insert_query = "INSERT INTO wishlists (birthday_id, item_name) VALUES (%s, %s)"
-        cursor.execute(insert_query, (birthday_id, wish))
-        conn.commit()
-
-        await update.message.reply_text("Ваше побажання додано до вішлісту!")
-        cursor.close()
-        conn.close()
-        return ConversationHandler.END
-
-
-    def schedule_birthday_reminders(self):
-        query = "SELECT nickname, birthday FROM birthdays"
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute(query)
-        results = cursor.fetchall()
-
-        for nickname, birthday in results:
-            self.scheduler.add_job(self.send_birthday_reminder,
-                                   IntervalTrigger(days=1),  # Запускаємо щодня
-                                   args=[nickname, birthday])
-
-        cursor.close()
-        conn.close()
-
-
-    async def send_birthday_reminder(self, nickname: str, birthday: str):
-        today = datetime.today()
-        birthday_date = datetime.strptime(birthday, "%Y-%m-%d")
-
-        if today.date() == birthday_date.date() - timedelta(days=7):
-            await self.send_message(f"Нагадування: через тиждень у {nickname} день народження! Не забудь надіслати гроші!")
-        elif today.date() == birthday_date.date() - timedelta(days=3):
-            await self.send_message(f"Нагадування: через 3 дні у {nickname} день народження! Пам'ятай про подарунок!")
-
-
 
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Введення дати дня народження скасовано")
