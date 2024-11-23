@@ -257,7 +257,7 @@ class Commandshendler:
 
     async def help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
-            "Команди користувача:\n/view_birthdays - Переглянути всі дні народження\n/add_wish - Додати елемент до свого списку бажань\n/delete_wish - Видалити побажання з свого списку юажань\n/view_wishlist - Переглянути чийсь список бажань\n/my_wishlist - Переглянути свій список бажань\n\nКоманди адміністратора:\n/add_birthday - Додати новий день народження\n/edit_birthday - Редагувати існуючий день народження\n/delete_birthday - Видалити день народження")
+            "Команди користувача:\n/view_birthdays - Переглянути всі дні народження\n/add_wish - Додати елемент до свого списку бажань\n/delete_wish - Видалити побажання з свого списку юажань\n/view_wishlist - Переглянути чийсь список бажань\n/my_wishlist - Переглянути свій список бажань\n/get_requisites - Переглянути реквізити\n\nКоманди адміністратора:\n/add_birthday - Додати новий день народження\n/edit_birthday - Редагувати існуючий день народження\n/delete_birthday - Видалити день народження\n/set_requisites - Додати реквізити\n")
 
     async def add_birthday(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
