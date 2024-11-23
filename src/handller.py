@@ -1,4 +1,3 @@
-from flask.sansio import app
 from telegram import Update, MessageEntity
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, filters, ConversationHandler, MessageHandler, \
     CallbackContext
@@ -6,28 +5,30 @@ from src.database import get_connection
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from flask import Flask, request, jsonify
 from datetime import datetime, timedelta
 import asyncio
 import schedule
-import time
+
 
 ASK_BIRTHDAY_NAME: int
-ASK_BIRTHDAY_NAME, ASK_BIRTHDAY_DATE, ASK_DELETE_BIRTHDAY, ASK_EDIT_BIRTHDAY_NAME, ASK_EDIT_BIRTHDAY_DATE,ASK_WISH,ASK_DELETE_WISH = range(7)
+ASK_BIRTHDAY_NAME, ASK_BIRTHDAY_DATE, ASK_DELETE_BIRTHDAY, ASK_EDIT_BIRTHDAY_NAME, ASK_EDIT_BIRTHDAY_DATE,ASK_WISH,ASK_DELETE_WISH,SET_REQUISITES_STATE = range(8)
 
 
 class Commandshendler:
     def __init__(self, app):
         self.app = app
+        self.db = get_connection()
         self.scheduler = AsyncIOScheduler()  # Initialize Async Scheduler
         self.setup()
         self.wishlist = {}
         self.schedule_daily_birthday_check()
         self.chat_id = None
 
+
     def setup(self):
         self.app.add_handler(CommandHandler("start", self.start))
         self.app.add_handler(CommandHandler("help", self.help))
+        self.app.add_handler(CommandHandler("get_requisites", self.get_requisites))
         self.app.add_handler(CommandHandler("view_birthdays", self.view_birthdays))
         self.app.add_handler(CommandHandler("my_wishlist", self.my_wishlist))
         self.app.add_handler(ConversationHandler(
@@ -75,15 +76,70 @@ class Commandshendler:
             },
             fallbacks=[CommandHandler("cancel", self.cancel)]
         ))
+        self.app.add_handler(ConversationHandler(
+            entry_points=[CommandHandler("set_requisites", self.set_requisites)],
+            states={
+                SET_REQUISITES_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.save_requisites)]
+            },
+            fallbacks=[CommandHandler("cancel", self.cancel)]
+        ))
+
+    async def set_requisites(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Command for administrators to set the requisites."""
+        if update.message.chat.type in ['group', 'supergroup']:
+            user_id = update.message.from_user.id
+            chat_id = update.message.chat.id
+            admins = await context.bot.get_chat_administrators(chat_id)
+            if any(admin.user.id == user_id for admin in admins):
+                await update.message.reply_text("Введіть реквізити для групи:")
+                return SET_REQUISITES_STATE  # State for the next step
+            else:
+                await update.message.reply_text("Ви не можете додати реквізити, адже не являєтесь адміністратором.")
+        else:
+            await update.message.reply_text("Ця команда працює тільки у групах.")
+
+    async def save_requisites(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Save requisites to the database."""
+        chat_id = update.message.chat.id
+        requisites = update.message.text
+
+        try:
+            with self.db.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO requisites (chat_id, bank_details) VALUES (%s, %s) "
+                    "ON DUPLICATE KEY UPDATE bank_details = VALUES(bank_details)",
+                    (chat_id, requisites)
+                )
+                self.db.commit()
+
+            await update.message.reply_text("Реквізити успішно встановлені!")
+        except Exception as e:
+            await update.message.reply_text(f"Помилка у введені реквізитів: {e}")
+        return ConversationHandler.END
+
+    async def get_requisites(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Retrieve requisites from the database."""
+        chat_id = update.message.chat.id
+
+        try:
+            with self.db.cursor() as cursor:
+                cursor.execute("SELECT bank_details FROM requisites WHERE chat_id = %s", (chat_id,))
+                result = cursor.fetchone()
+
+            if result:
+                await update.message.reply_text(f"Реквізити: {result[0]}")
+            else:
+                await update.message.reply_text("В цій групі ще не додані реквізити.")
+        except Exception as e:
+            await update.message.reply_text(f"Error retrieving requisites: {e}")
 
     async def capture_chat_id(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Capture and save the chat_id when the bot joins a new group."""
         chat_id = update.effective_chat.id
 
         connection = get_connection()
         with connection.cursor() as cursor:
             cursor.execute(
-                "INSERT IGNORE INTO birthdays (chat_id) VALUES (%s)",  # Ensure no duplicates
+                "INSERT IGNORE INTO birthdays (chat_id) VALUES (%s)",
                 (chat_id,)
             )
         connection.commit()
@@ -94,23 +150,23 @@ class Commandshendler:
         """Function to check the database for today’s birthdays and send greetings."""
 
         connection = get_connection()
-        today = datetime.now().strftime('%m-%d')  # Format today's date as month-day
+        today = datetime.now().strftime('%m-%d')
 
         # Fetch all chat_id values
         with connection.cursor() as cursor:
-            cursor.execute("SELECT DISTINCT chat_id FROM birthdays")  # Get all unique chat_ids
+            cursor.execute("SELECT DISTINCT chat_id FROM birthdays")
             chat_ids = cursor.fetchall()
 
         if not chat_ids:
             print("No chat IDs found in the database.")
             return
 
-        print(f"Chat IDs found: {chat_ids}")  # Log chat_ids
+        print(f"Chat IDs found: {chat_ids}")
 
         for chat_id_row in chat_ids:
             chat_id = chat_id_row[0]
 
-            # Query for today's birthdays in each group
+
             with connection.cursor() as cursor:
                 cursor.execute(
                     "SELECT nickname FROM birthdays WHERE DATE_FORMAT(birthday, '%m-%d') = %s AND chat_id = %s",
@@ -121,24 +177,22 @@ class Commandshendler:
                 print(f"No birthdays found today for group with chat_id {chat_id}.")
                 continue
 
-            # Send greetings if there are birthdays today in this group
             for birthday in birthdays:
                 nickname = birthday[0]
-                message = f"🎉 Happy Birthday, {nickname}! 🎂 Wishing you a fantastic day!"
-                print(f"Sending message to chat_id {chat_id}: {message}")  # Log the message
+                message = f"🎉 З Днем народження, {nickname}! 🎂 Щиро бажаємо всього найкращого!"
+                print(f"Sending message to chat_id {chat_id}: {message}")
                 try:
                     await self.app.bot.send_message(chat_id=chat_id, text=message)
                     print(f"Message successfully sent to {nickname}")
                 except Exception as e:
-                    print(f"Error sending message: {e}")  # Log any errors if the message isn't sent
+                    print(f"Error sending message: {e}")
 
         connection.close()
 
     def schedule_daily_birthday_check(self):
         """Schedules the birthday check to run daily at a specified time."""
-        self.scheduler.add_job(self.check_birthdays, CronTrigger(hour=16, minute=17))  # Example: 9:00 AM daily
+        self.scheduler.add_job(self.check_birthdays, CronTrigger(hour=16, minute=17))
         self.scheduler.start()
-
 
 
 

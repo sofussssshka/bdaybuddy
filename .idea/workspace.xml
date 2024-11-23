@@ -4,7 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="29b8cb4b-e726-4263-822f-fd5a7b62901f" name="Changes" comment="init">
+    <list default="true" id="29b8cb4b-e726-4263-822f-fd5a7b62901f" name="Changes" comment="add greetings">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/handller.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/handller.py" afterDir="false" />
     </list>
@@ -50,7 +50,7 @@
     "Python.main.executor": "Run",
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "git-widget-placeholder": "master",
-    "last_opened_file_path": "C:/Users/User/Desktop/9 дфиф ЗНЕРЩТ",
+    "last_opened_file_path": "C:/Users/User/Desktop/УНІК/бд/bd10",
     "node.js.detected.package.eslint": "true",
     "node.js.detected.package.tslint": "true",
     "node.js.selected.package.eslint": "(autodetect)",
@@ -81,7 +81,7 @@
       <option name="presentableId" value="Default" />
       <updated>1731190909316</updated>
       <workItem from="1731190919300" duration="47224000" />
-      <workItem from="1731485732797" duration="20713000" />
+      <workItem from="1731485732797" duration="47902000" />
     </task>
     <task id="LOCAL-00001" summary="init">
       <option name="closed" value="true" />
@@ -115,7 +115,15 @@
       <option name="project" value="LOCAL" />
       <updated>1731399513133</updated>
     </task>
-    <option name="localTasksCounter" value="5" />
+    <task id="LOCAL-00005" summary="add greetings">
+      <option name="closed" value="true" />
+      <created>1731681549125</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1731681549125</updated>
+    </task>
+    <option name="localTasksCounter" value="6" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -135,10 +143,11 @@
   <component name="VcsManagerConfiguration">
     <MESSAGE value="add commands with wishlists" />
     <MESSAGE value="init" />
-    <option name="LAST_COMMIT_MESSAGE" value="init" />
+    <MESSAGE value="add greetings" />
+    <option name="LAST_COMMIT_MESSAGE" value="add greetings" />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
-    <SUITE FILE_PATH="coverage/pythonProject$main.coverage" NAME="main Coverage Results" MODIFIED="1731681374437" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/src" />
+    <SUITE FILE_PATH="coverage/pythonProject$main.coverage" NAME="main Coverage Results" MODIFIED="1732320806109" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/src" />
     <SUITE FILE_PATH="coverage/pythonProject$handller.coverage" NAME="handller Coverage Results" MODIFIED="1731601619419" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/src" />
   </component>
 </project>
