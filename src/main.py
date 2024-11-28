@@ -5,7 +5,7 @@ from handller import Commandshendler
 
 def main():
 
-    application = ApplicationBuilder().token("7782910038:AAHdMjaPLSvNRDGReYQ2eOXvIvl6TTniwf8").build()
+    application = ApplicationBuilder().token("").build()
 
     Commandshendler(application)
     application.run_polling()
